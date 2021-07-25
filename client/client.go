@@ -154,7 +154,6 @@ func (u *Unity) Upload() (*Entity, error) {
 		}()
 
 		u.Put(ent.Uuid, 0, size, r)
-		fmt.Printf("upload success size=%d sha=%s\n", size, hex.EncodeToString(ent.Sha0))
 	}
 	if rand2.Int() % 3 > 0 {
 		r, w := io.Pipe()
