@@ -14,26 +14,26 @@ import (
 	"time"
 )
 
-type Unity struct {
+type Engine struct {
 	Addr string
 	Port int
 	c    net.Conn
 	b    [1024]byte
 }
 
-func (u *Unity) Close() error {
-	if u.c != nil {
-		return u.c.Close()
+func (e *Engine) Close() error {
+	if e.c != nil {
+		return e.c.Close()
 	}
 	return nil
 }
 
-func (u *Unity) Connect() error {
-	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", u.Addr, u.Port))
+func (e *Engine) Connect() error {
+	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", e.Addr, e.Port))
 	if err != nil {return err}
-	u.c = c
+	e.c = c
 	conn := &server.Stream{Rwp: c}
-	buf := u.b[:]
+	buf := e.b[:]
 	secret := "larryhou"
 	if err := conn.WriteString(buf, secret); err != nil {return err}
 	version := "simv2.0"
@@ -44,9 +44,9 @@ func (u *Unity) Connect() error {
 	return nil
 }
 
-func (u *Unity) Get(id []byte, t int, w io.Writer) error {
+func (e *Engine) Get(id []byte, t int, w io.Writer) error {
 	p := 0
-	b := u.b[0:]
+	b := e.b[0:]
 	b[p] = 'g'
 	p++
 	copy(b[p:], id)
@@ -54,7 +54,7 @@ func (u *Unity) Get(id []byte, t int, w io.Writer) error {
 	binary.BigEndian.PutUint32(b[p:], uint32(t))
 	p += 4
 
-	conn := &server.Stream{Rwp: u.c}
+	conn := &server.Stream{Rwp: e.c}
 	if err := conn.Write(b, p); err != nil {return err}
 
 	n := 1 + 32 + 4 + 8
@@ -73,9 +73,9 @@ func (u *Unity) Get(id []byte, t int, w io.Writer) error {
 
 	read := int64(0)
 	for read < size {
-		num := int64(len(u.b))
+		num := int64(len(e.b))
 		if size - read < num { num = size - read }
-		b = u.b[:num]
+		b = e.b[:num]
 		if err := conn.Read(b, int(num)); err != nil {return fmt.Errorf("read:%c %d != %d err: %v", t, read, size, err)} else {
 			read += num
 			for b := b; len(b) > 0; {
@@ -86,9 +86,9 @@ func (u *Unity) Get(id []byte, t int, w io.Writer) error {
 	return nil
 }
 
-func (u *Unity) Put(id []byte, t int, size int64, r io.Reader) error {
+func (e *Engine) Put(id []byte, t int, size int64, r io.Reader) error {
 	p := 0
-	b := u.b[:]
+	b := e.b[:]
 	b[p] = 'p'
 	p++
 	copy(b[p:], id)
@@ -97,13 +97,13 @@ func (u *Unity) Put(id []byte, t int, size int64, r io.Reader) error {
 	p += 4
 	binary.BigEndian.PutUint64(b[p:], uint64(size))
 	p += 8
-	conn := &server.Stream{Rwp: u.c}
+	conn := &server.Stream{Rwp: e.c}
 	if err := conn.Write(b, p); err != nil {return err}
 	sent := int64(0)
 	for sent < size {
-		num := int64(len(u.b))
+		num := int64(len(e.b))
 		if size - sent < num { num = size - sent }
-		b := u.b[:num]
+		b := e.b[:num]
 		if n, err := r.Read(b); err != nil {return err} else {
 			if err := conn.Write(b, n); err != nil {return err}
 			sent += int64(n)
@@ -112,7 +112,7 @@ func (u *Unity) Put(id []byte, t int, size int64, r io.Reader) error {
 	return nil
 }
 
-func (u *Unity) Pump(size int64, w io.Writer) error {
+func (e *Engine) Pump(size int64, w io.Writer) error {
 	buf := make([]byte, 1280)
 	sent := int64(0)
 	for sent < size {
@@ -135,7 +135,7 @@ type Entity struct {
 	Size int64
 }
 
-func (u *Unity) Upload() (*Entity, error) {
+func (e *Engine) Upload() (*Entity, error) {
 	ent := &Entity{}
 	ent.Uuid = make([]byte, 32)
 	rand.Read(ent.Uuid)
@@ -149,11 +149,11 @@ func (u *Unity) Upload() (*Entity, error) {
 			defer w.Close()
 			h := sha256.New()
 			f := io.MultiWriter(w, h)
-			if err := u.Pump(size, f); err != nil {return}
+			if err := e.Pump(size, f); err != nil {return}
 			ent.Sha0 = h.Sum(nil)
 		}()
 
-		u.Put(ent.Uuid, 0, size, r)
+		e.Put(ent.Uuid, 0, size, r)
 	}
 	if rand2.Int() % 3 > 0 {
 		r, w := io.Pipe()
@@ -162,11 +162,11 @@ func (u *Unity) Upload() (*Entity, error) {
 			defer w.Close()
 			h := sha256.New()
 			f := io.MultiWriter(w, h)
-			if err := u.Pump(size, f); err != nil {return}
+			if err := e.Pump(size, f); err != nil {return}
 			ent.Sha1 = h.Sum(nil)
 		}()
 
-		u.Put(ent.Uuid, 1, size, r)
+		e.Put(ent.Uuid, 1, size, r)
 	}
 
 	return ent, nil
@@ -178,12 +178,12 @@ func (c *Counter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (u *Unity) Download(ent *Entity) error {
+func (e *Engine) Download(ent *Entity) error {
 	{
 		var c Counter
 		h := sha256.New()
 		w := io.MultiWriter(&c, h)
-		if err := u.Get(ent.Uuid, 0, w); err != nil {return err}
+		if err := e.Get(ent.Uuid, 0, w); err != nil {return err}
 		if c == 0 { return nil }
 		if int64(c) != ent.Size {return fmt.Errorf("size not match: %d != %d", c, ent.Size)}
 		s := h.Sum(nil)
@@ -193,7 +193,7 @@ func (u *Unity) Download(ent *Entity) error {
 		var c Counter
 		h := sha256.New()
 		w := io.MultiWriter(&c, h)
-		if err := u.Get(ent.Uuid, 1, w); err != nil {return err}
+		if err := e.Get(ent.Uuid, 1, w); err != nil {return err}
 		if c == 0 {return nil}
 		s := h.Sum(nil)
 		if len(ent.Sha1) > 0 && !bytes.Equal(s, ent.Sha1[:32]) {panic(fmt.Errorf("sha1 not match: %s != %s %s %d", hex.EncodeToString(s), hex.EncodeToString(ent.Sha1), hex.EncodeToString(ent.Uuid), c))}

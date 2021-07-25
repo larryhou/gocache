@@ -40,7 +40,7 @@ var environ struct{
 type Context struct {
 	work   chan int
 	entpsh chan *client.Entity
-	u      *client.Unity
+	u      *client.Engine
 }
 
 func (c *Context) Uintptr() uintptr {
@@ -193,7 +193,7 @@ func handle(c net.Conn) {
 
 func addClients(num int) {
 	for i := 0; i < num; i++ {
-		u := &client.Unity{Addr: environ.addr, Port: environ.port}
+		u := &client.Engine{Addr: environ.addr, Port: environ.port}
 		if err := u.Connect(); err != nil {
 			u.Close()
 			go func() {
@@ -206,7 +206,7 @@ func addClients(num int) {
 	}
 }
 
-func runClient(u *client.Unity) {
+func runClient(u *client.Engine) {
 	defer u.Close()
 	ctx := &Context{u: u, work: make(chan int), entpsh: make(chan *client.Entity)}
 	logger.Debug("client", zap.Uintptr("ctx", ctx.Uintptr()))
