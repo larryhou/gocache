@@ -191,6 +191,7 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
 }
 
 func (s *CacheServer) Handle(c net.Conn) {
+    ready := false
     conn := &Stream{Rwp: c}
     addr := c.RemoteAddr().String()
     logger.Info("connected", zap.String("addr", addr))
@@ -198,7 +199,7 @@ func (s *CacheServer) Handle(c net.Conn) {
     ts := time.Now()
     usize := int64(0)
     defer func() {
-        close(event)
+        if ready {close(event)} else {c.Close()}
         if usize > 0 {
             elapse := time.Now().Sub(ts).Seconds()
             speed := float64(usize) / elapse
@@ -224,8 +225,9 @@ func (s *CacheServer) Handle(c net.Conn) {
     }
 
     logger.Debug("handshake", zap.String("addr", addr), zap.String("ver", version))
-
     go s.Send(c, event, version)
+    ready = true
+
     for {
         if err := conn.Read(buf, 1); err != nil {
             if err != io.EOF { logger.Error("read command err", zap.Error(err)) }
