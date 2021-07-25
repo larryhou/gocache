@@ -2,7 +2,7 @@ package main
 
 import (
     "flag"
-    "github.com/larryhou/unity-gocache/server"
+    "github.com/larryhou/gocache/server"
     "net/http"
     _ "net/http/pprof"
 )

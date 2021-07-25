@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"github.com/larryhou/unity-gocache/client"
+	"github.com/larryhou/gocache/client"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"math/rand"
