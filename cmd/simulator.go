@@ -78,7 +78,7 @@ func main() {
 		for {
 			select {
 			case ent := <-environ.entity:
-				logger.Debug("ENTITY", zap.String("guid", hex.EncodeToString(ent.Guid)))
+				logger.Debug("ENTITY", zap.String("uuid", hex.EncodeToString(ent.Uuid)))
 				environ.library = append(environ.library, ent)
 			case ctx := <-environ.idle:
 				rand.Seed(time.Now().UnixNano())
@@ -222,7 +222,7 @@ func runClient(u *client.Unity) {
 			if float64(num%10000)/10000 > environ.down || len(environ.library) == 0 {
 				logger.Debug("upload", zap.Uintptr("ctx", ctx.Uintptr()))
 				if ent, err := u.Upload(); err == nil {
-					logger.Debug("upload", zap.Uintptr("ctx", ctx.Uintptr()), zap.String("guid", hex.EncodeToString(ent.Guid)))
+					logger.Debug("upload", zap.Uintptr("ctx", ctx.Uintptr()), zap.String("uuid", hex.EncodeToString(ent.Uuid)))
 					go func() {
 						environ.idle <- ctx
 						logger.Debug("push idle u", zap.Uintptr("ctx", ctx.Uintptr()))
@@ -242,11 +242,10 @@ func runClient(u *client.Unity) {
 			}
 		case ent := <-ctx.entpsh:
 			if ent == nil {return}
-			logger.Debug("down", zap.Uintptr("ctx", ctx.Uintptr()), zap.String("guid", hex.EncodeToString(ent.Guid)))
+			logger.Debug("down", zap.Uintptr("ctx", ctx.Uintptr()), zap.String("uuid", hex.EncodeToString(ent.Uuid)))
 			if err := u.Download(ent); err != nil {
 				logger.Error("down err: %v",
-					zap.String("guid", hex.EncodeToString(ent.Guid)),
-					zap.String("hash", hex.EncodeToString(ent.Hash)), zap.Error(err))
+					zap.String("uuid", hex.EncodeToString(ent.Uuid)), zap.Error(err))
 			} else {
 				go func() {
 					environ.idle <- ctx

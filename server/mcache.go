@@ -134,13 +134,13 @@ func (m *memCache) stat() {
             size += int64(entity.data.Cap())
         }
         m.RUnlock()
-        logger.Info("mcache", zap.Int("library", len(m.library)),
+        logger.Debug("mcache", zap.Int("library", len(m.library)),
             zap.Int("lookups", len(m.lookups)),
             zap.Int64("size", size),
             zap.Int("pget", mcache.pool.g),
             zap.Int("pput", mcache.pool.p),
             zap.Int("pnew", mcache.pool.n))
-        time.Sleep(5 * time.Second)
+        time.Sleep(60 * time.Second)
     }
 }
 
@@ -183,7 +183,7 @@ var mcache struct {
     limit  int64
     errors struct {
         unavailable error
-        cacherr    error
+        cacherr     error
     }
 }
 
