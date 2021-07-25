@@ -1,6 +1,7 @@
 package server
 
 import (
+    "bytes"
     "encoding/binary"
     "encoding/hex"
     "fmt"
@@ -32,6 +33,39 @@ type Stream struct {
     Rwp io.ReadWriter
 }
 
+func (s *Stream) ReadString(buf []byte) (string, error) {
+    if err := s.Read(buf, 2); err != nil {return "", err}
+    n := int(binary.BigEndian.Uint16(buf))
+    if n < cap(buf) {
+        if err := s.Read(buf, n); err != nil {return "", err}
+        return string(buf[:n]), nil
+    } else {
+        b := &bytes.Buffer{}
+        for t := 0; t < n; {
+            num := cap(buf)
+            if n - t < num {num = n - t}
+            if err := s.Read(buf, num); err != nil {return "", err}
+            if _, err := b.Write(buf[:num]); err != nil {return "", err}
+            t += num
+        }
+        return b.String(), nil
+    }
+}
+
+func (s *Stream) WriteString(buf []byte, v string) error {
+    n := len(v)
+    binary.BigEndian.PutUint16(buf, uint16(n))
+    if err := s.Write(buf, 2); err != nil {return err}
+    for t := 0; t < n; {
+        num := cap(buf)
+        if n - t < num {num = n - t}
+        copy(buf, v[t:t+num])
+        if err := s.Write(buf, num); err != nil {return err}
+        t += num
+    }
+    return nil
+}
+
 func (s *Stream) Read(p []byte, n int) error {
     for t := 0; t < n; {
         if i, err := s.Rwp.Read(p[t:n]); err != nil {return err} else {t+=i}
@@ -52,11 +86,13 @@ func (s *Stream) Close() error {
 }
 
 type CacheServer struct {
-    Port     int
-    Path     string
-    LogLevel int
-    CacheCap int
-    temp     string
+    Port      int
+    Path      string
+    LogLevel  int
+    CacheCap  int
+    Secret    string
+    UnsafeGet bool
+    temp      string
 }
 
 func (s *CacheServer) Listen() error {
@@ -89,7 +125,7 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
             logger.Info("closed w", zap.String("addr", addr), zap.Int64("size", dsize), zap.Float64("speed", speed), zap.Float64("elapse", elapse))
         } else { logger.Info("closed w", zap.String("addr", addr)) }
     }()
-    out := &Stream{Rwp: c}
+    conn := &Stream{Rwp: c}
 
     buf := make([]byte, 1280)
     for ctx := range event {
@@ -121,7 +157,7 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
             }
             p += 8
 
-            if err := out.Write(buf, p); err != nil { logger.Error("send get + err", zap.Error(err));return }
+            if err := conn.Write(buf, p); err != nil { logger.Error("send get + err", zap.Error(err));return }
             dsize += int64(p)
             if !exist {continue}
 
@@ -140,12 +176,11 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
                     return
                 } else {
                     sent += num
-                    if err := out.Write(buf, int(num)); err != nil {
+                    if err := conn.Write(buf, int(num)); err != nil {
                         in.Close()
                         logger.Error("get sent body err", zap.Int64("sent", sent), zap.Int64("size", size), zap.Error(err))
                         return
                     }
-                    //logger.Debug("get", zap.Int64("size", size), zap.Int64("sent", sent))
                 }
             }
             in.Close()
@@ -171,17 +206,24 @@ func (s *CacheServer) Handle(c net.Conn) {
         } else { logger.Info("closed r", zap.String("addr", addr)) }
     }()
 
+    safe := true
     var version string
     buf := make([]byte, 1024)
-    {
-        if err := conn.Read(buf, 2); err != nil {logger.Error("read version size err", zap.Error(err));return}
-        n := int(binary.BigEndian.Uint16(buf))
-        if err := conn.Read(buf[2:], n); err != nil {logger.Error("read version err", zap.Error(err));return}
-        version = string(buf[2:2+n])
-        if err := conn.Write(buf, n+2); err != nil {logger.Error("echo version err", zap.String("ver", version), zap.Error(err));return}
-        logger.Debug("handshake", zap.String("ver", version))
-        usize += 2 + int64(n)
+    if secret, err := conn.ReadString(buf); err != nil {return} else {
+        if secret != s.Secret {
+            if !s.UnsafeGet{return}
+            safe = false
+        }
     }
+
+    if ver, err := conn.ReadString(buf); err == nil {version = ver} else {
+        logger.Error("read version err", zap.Error(err));return
+    }
+    if err := conn.WriteString(buf, version); err != nil {
+        logger.Error("echo version err", zap.String("ver", version), zap.Error(err));return
+    }
+
+    logger.Debug("handshake", zap.String("addr", addr), zap.String("ver", version))
 
     go s.Send(c, event, version)
     for {
@@ -213,12 +255,22 @@ func (s *CacheServer) Handle(c net.Conn) {
             usize += 8
             size := int64(binary.BigEndian.Uint64(b))
             logger.Debug("put", zap.String("uuid", uuid), zap.Int("type", t), zap.Int64("size", size))
+            if !safe { /* read and discard in unsafe mode */
+                write := int64(0)
+                for write < size {
+                    num := int64(len(buf))
+                    if size - write < num { num = size - write }
+                    if err := conn.Read(buf, int(num)); err != nil {return} else {write += num}
+                }
+                usize += write
+                logger.Debug("put discard", zap.String("uuid", uuid), zap.Int("type", t), zap.Int64("size", write))
+                continue
+            }
 
             t := strconv.Itoa(t)
             dir := path.Join(s.Path, version, uuid[:2], uuid)
             if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) { os.MkdirAll(dir, 0700) }
             filename := path.Join(dir, t)
-
             name := buf[:32]
             rand.Read(name)
             if _, err := os.Stat(s.temp); err != nil && os.IsNotExist(err) { os.MkdirAll(s.temp, 0700) }
@@ -237,7 +289,6 @@ func (s *CacheServer) Handle(c net.Conn) {
                         logger.Error("put write cache err", zap.Int64("write", write), zap.Int64("size", size), zap.Error(err))
                         return
                     }
-                    //logger.Debug("put", zap.Int64("size", size), zap.Int64("write", write))
                 }
             }
             out.Close()
@@ -245,9 +296,7 @@ func (s *CacheServer) Handle(c net.Conn) {
                 logger.Error("put failure", zap.String("type", t), zap.Int64("write", write), zap.String("file", filename), zap.Error(err))
                 return
             }
-            if write == size { logger.Debug("put success", zap.String("type", t), zap.Int64("write", write), zap.String("file", filename))} else {
-                logger.Error("put", zap.Int64("size", size), zap.Int64("write", write))
-            }
+            logger.Debug("put success", zap.String("type", t), zap.Int64("write", write), zap.String("file", filename))
             usize += write
         default:
             logger.Error("unsupported command", zap.String("cmd", string(cmd)))

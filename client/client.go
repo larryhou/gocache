@@ -32,16 +32,15 @@ func (u *Unity) Connect() error {
 	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", u.Addr, u.Port))
 	if err != nil {return err}
 	u.c = c
-	ver := "simv2.0"
-	buf := make([]byte, len(ver) + 2)
-	binary.BigEndian.PutUint16(buf, uint16(len(ver)))
-	copy(buf[2:], ver)
 	conn := &server.Stream{Rwp: c}
-	if err := conn.Write(buf, len(buf)); err != nil {return err}
-	if err := conn.Read(buf, len(buf)); err != nil {return err}
-	s := binary.BigEndian.Uint16(buf[:2])
-	if int(s) != len(ver) { return fmt.Errorf("version size err: %d", s) }
-	if !bytes.Equal([]byte(ver), buf[2:]) { return fmt.Errorf("version not match: %s != %s", string(buf[2:]), ver) }
+	buf := u.b[:]
+	secret := "larryhou"
+	if err := conn.WriteString(buf, secret); err != nil {return err}
+	version := "simv2.0"
+	if err := conn.WriteString(buf, version); err != nil {return err}
+	if ver, err := conn.ReadString(buf); err != nil {return err} else {
+		if ver != version {return fmt.Errorf("version not match: %s != %s", ver, version)}
+	}
 	return nil
 }
 
