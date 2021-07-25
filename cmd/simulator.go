@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -118,7 +119,7 @@ func main() {
 			}
 		}
 	}()
-	go http.ListenAndServe(":9999", nil)
+	go http.ListenAndServe(":9998", nil)
 	addClients(environ.count)
 	server, err := net.Listen("tcp", fmt.Sprintf(":%d", environ.cmdPort))
 	if err != nil { panic(err) }
