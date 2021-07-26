@@ -78,6 +78,7 @@ type memCache struct {
     size     int64
     g        int
     p        int
+    n        int
     sync.RWMutex
 }
 
@@ -134,17 +135,19 @@ func (m *memCache) stat() {
             zap.Int("lookups", len(m.lookups)),
             zap.Int64("size", size),
             zap.Int("get", mcache.core.g),
+            zap.Float64("gpt", float64(mcache.core.g) / float64(mcache.core.n)),
             zap.Int("put", mcache.core.p),
             zap.Int("pget", mcache.pool.g),
             zap.Int("pput", mcache.pool.p),
             zap.Int("pnew", mcache.pool.n))
-        time.Sleep(60 * time.Second)
+        time.Sleep(5 * time.Second)
     }
 }
 
 func (m *memCache) get(uuid string) (*bytes.Buffer, error) {
     m.RLock()
     defer m.RUnlock()
+    m.n++
     if entity, ok := m.lookups[uuid]; ok {
         entity.hit++
         m.g++
