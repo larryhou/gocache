@@ -18,6 +18,7 @@ type File struct {
     f    *os.File
     w    io.Writer
     r    io.Reader
+    c    bool
 }
 
 func (f *File) Read(p []byte) (int, error) {
@@ -205,7 +206,7 @@ func init() {
 func Open(name string, uuid string) (*File, error) {
     if mcache.core.capacity > 0 {
         if data, err := mcache.core.get(uuid); err == nil {
-            return &File{m: data, uuid: uuid}, nil
+            return &File{m: data, uuid: uuid, c: true}, nil
         }
     }
     file, err := os.Open(name)

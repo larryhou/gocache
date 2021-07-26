@@ -184,7 +184,7 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
                 }
             }
             in.Close()
-            if sent == fi.Size() { logger.Debug("get success", zap.Int64("sent", sent), zap.String("file", filename)) }
+            if sent == fi.Size() { logger.Debug("get success", zap.Int64("sent", sent), zap.String("file", filename), zap.Bool("cache", file.c)) }
             dsize += sent
         }
     }
