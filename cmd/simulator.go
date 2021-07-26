@@ -8,6 +8,7 @@ import (
 	"github.com/larryhou/gocache/client"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -104,9 +105,12 @@ func main() {
 				for {
 					if len(environ.library) > 0 {
 						rand.Seed(time.Now().UnixNano())
-						n := rand.Intn(len(environ.library))
+						p := rand.Float64()
+						span := len(environ.library)
+						if span > 1e+3 { span = 1e+3 }
+						n := math.Pow(p, 4) * float64(span)
 						go func() {
-							ctx.entpsh <- environ.library[n]
+							ctx.entpsh <- environ.library[len(environ.library) - int(n) - 1]
 							logger.Debug("send entity", zap.Uintptr("ctx", ctx.Uintptr()))
 						}()
 						break
