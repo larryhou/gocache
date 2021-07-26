@@ -127,7 +127,7 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
     }()
     conn := &Stream{Rwp: c}
 
-    buf := make([]byte, 1280)
+    buf := make([]byte, 64<<10)
     for ctx := range event {
         switch ctx.command {
         case 'g':
@@ -209,7 +209,7 @@ func (s *CacheServer) Handle(c net.Conn) {
 
     safe := true
     var version string
-    buf := make([]byte, 1024)
+    buf := make([]byte, 16<<10)
     if secret, err := conn.ReadString(buf); err != nil {return} else {
         if secret != s.Secret {
             if !s.UnsafeGet{return}
