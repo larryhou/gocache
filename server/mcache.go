@@ -6,7 +6,6 @@ import (
     "go.uber.org/zap"
     "io"
     "os"
-    "sort"
     "sync"
     "time"
     "unsafe"
@@ -68,8 +67,8 @@ type memEntity struct {
     data *bytes.Buffer
     uuid string
     size int64
-    hit  int
     ts   int64
+    hit  int
 }
 
 type memCache struct {
@@ -77,6 +76,8 @@ type memCache struct {
     lookups  map[string]*memEntity
     library  []*memEntity
     size     int64
+    g        int
+    p        int
     sync.RWMutex
 }
 
@@ -98,6 +99,7 @@ func (m *memCache) remove(uuid string) {
 func (m *memCache) put(uuid string, data *bytes.Buffer) {
     m.Lock()
     defer m.Unlock()
+    m.p++
     logger.Debug("mcache", zap.String("put", uuid), zap.Int("size", data.Len()), zap.Uintptr("ptr", uintptr(unsafe.Pointer(data))))
     m.remove(uuid) /* clean up old one */
     entity := &memEntity{uuid: uuid, data: data, size: int64(data.Len()), ts: time.Now().UnixNano()}
@@ -105,12 +107,6 @@ func (m *memCache) put(uuid string, data *bytes.Buffer) {
     m.library = append(m.library, entity)
     m.size += int64(data.Cap())
     if m.capacity < len(m.library) {
-        sort.Slice(m.library, func(i, j int) bool {
-            ei := m.library[i]
-            ej := m.library[j]
-            if ei.hit != ej.hit { return ei.hit < ej.hit }
-            return ei.ts < ej.ts
-        })
         for i := 0; i < len(m.library); i++ {
             entity := m.library[i]
             if m.capacity < len(m.library) {
@@ -137,6 +133,8 @@ func (m *memCache) stat() {
         logger.Debug("mcache", zap.Int("library", len(m.library)),
             zap.Int("lookups", len(m.lookups)),
             zap.Int64("size", size),
+            zap.Int("get", mcache.core.g),
+            zap.Int("put", mcache.core.p),
             zap.Int("pget", mcache.pool.g),
             zap.Int("pput", mcache.pool.p),
             zap.Int("pnew", mcache.pool.n))
@@ -149,6 +147,7 @@ func (m *memCache) get(uuid string) (*bytes.Buffer, error) {
     defer m.RUnlock()
     if entity, ok := m.lookups[uuid]; ok {
         entity.hit++
+        m.g++
         logger.Debug("mcache", zap.String("get", uuid),
             zap.Uintptr("ptr", uintptr(unsafe.Pointer(entity.data))),
             zap.Int("size", entity.data.Len()),

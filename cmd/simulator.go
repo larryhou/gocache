@@ -107,7 +107,7 @@ func main() {
 						rand.Seed(time.Now().UnixNano())
 						p := rand.Float64()
 						span := len(environ.library)
-						if span > 1e+3 { span = 1e+3 }
+						if span > 200 { span = 200 }
 						n := math.Pow(p, 4) * float64(span)
 						go func() {
 							ctx.entpsh <- environ.library[len(environ.library) - int(n) - 1]
