@@ -17,8 +17,8 @@ import (
 type Engine struct {
 	Addr string
 	Port int
-	c    net.Conn
-	b    [1024]byte
+	c    *server.Stream
+	b    [16<<10]byte
 }
 
 func (e *Engine) Close() error {
@@ -31,14 +31,13 @@ func (e *Engine) Close() error {
 func (e *Engine) Connect() error {
 	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", e.Addr, e.Port))
 	if err != nil {return err}
-	e.c = c
-	conn := &server.Stream{Rwp: c}
+	e.c = &server.Stream{Rwp: c}
 	buf := e.b[:]
 	secret := "larryhou"
-	if err := conn.WriteString(buf, secret); err != nil {return err}
+	if err := e.c.WriteString(buf, secret); err != nil {return err}
 	version := "simv2.0"
-	if err := conn.WriteString(buf, version); err != nil {return err}
-	if ver, err := conn.ReadString(buf); err != nil {return err} else {
+	if err := e.c.WriteString(buf, version); err != nil {return err}
+	if ver, err := e.c.ReadString(buf); err != nil {return err} else {
 		if ver != version {return fmt.Errorf("version not match: %s != %s", ver, version)}
 	}
 	return nil
@@ -54,11 +53,10 @@ func (e *Engine) Get(id []byte, t int, w io.Writer) error {
 	binary.BigEndian.PutUint32(b[p:], uint32(t))
 	p += 4
 
-	conn := &server.Stream{Rwp: e.c}
-	if err := conn.Write(b, p); err != nil {return err}
+	if err := e.c.Write(b, p); err != nil {return err}
 
 	n := 1 + 32 + 4 + 8
-	if err := conn.Read(b, n); err != nil {return err}
+	if err := e.c.Read(b, n); err != nil {return err}
 	c := b[0]
 	b = b[1:]
 	if !bytes.Equal(b[:32], id) {return fmt.Errorf("get id not match: %s != %s",
@@ -76,7 +74,7 @@ func (e *Engine) Get(id []byte, t int, w io.Writer) error {
 		num := int64(len(e.b))
 		if size - read < num { num = size - read }
 		b = e.b[:num]
-		if err := conn.Read(b, int(num)); err != nil {return fmt.Errorf("read:%c %d != %d err: %v", t, read, size, err)} else {
+		if err := e.c.Read(b, int(num)); err != nil {return fmt.Errorf("read:%c %d != %d err: %v", t, read, size, err)} else {
 			read += num
 			for b := b; len(b) > 0; {
 				if m, err := w.Write(b); err != nil {return err} else { b = b[m:] }
@@ -97,15 +95,14 @@ func (e *Engine) Put(id []byte, t int, size int64, r io.Reader) error {
 	p += 4
 	binary.BigEndian.PutUint64(b[p:], uint64(size))
 	p += 8
-	conn := &server.Stream{Rwp: e.c}
-	if err := conn.Write(b, p); err != nil {return err}
+	if err := e.c.Write(b, p); err != nil {return err}
 	sent := int64(0)
 	for sent < size {
 		num := int64(len(e.b))
 		if size - sent < num { num = size - sent }
 		b := e.b[:num]
 		if n, err := r.Read(b); err != nil {return err} else {
-			if err := conn.Write(b, n); err != nil {return err}
+			if err := e.c.Write(b, n); err != nil {return err}
 			sent += int64(n)
 		}
 	}
@@ -113,7 +110,7 @@ func (e *Engine) Put(id []byte, t int, size int64, r io.Reader) error {
 }
 
 func (e *Engine) Pump(size int64, w io.Writer) error {
-	buf := make([]byte, 1280)
+	buf := make([]byte, 32<<10)
 	sent := int64(0)
 	for sent < size {
 		num := int64(len(buf))
