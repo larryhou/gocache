@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/larryhou/gocache/server"
+	"hash"
 	"io"
 	rand2 "math/rand"
 	"net"
@@ -15,10 +16,11 @@ import (
 )
 
 type Engine struct {
-	Addr string
-	Port int
-	c    *server.Stream
-	b    [16<<10]byte
+	Addr   string
+	Port   int
+	Verify bool
+	c      *server.Stream
+	b      [32 << 10]byte
 }
 
 func (e *Engine) Close() error {
@@ -110,7 +112,7 @@ func (e *Engine) Put(id []byte, t int, size int64, r io.Reader) error {
 }
 
 func (e *Engine) Pump(size int64, w io.Writer) error {
-	buf := make([]byte, 32<<10)
+	buf := make([]byte, 64<<10)
 	sent := int64(0)
 	for sent < size {
 		num := int64(len(buf))
@@ -178,22 +180,34 @@ func (c *Counter) Write(p []byte) (int, error) {
 func (e *Engine) Download(ent *Entity) error {
 	{
 		var c Counter
-		h := sha256.New()
-		w := io.MultiWriter(&c, h)
+		var h hash.Hash
+		var w io.Writer
+		if !e.Verify {w = &c} else {
+			h = sha256.New()
+			w = io.MultiWriter(&c, h)
+		}
 		if err := e.Get(ent.Uuid, 0, w); err != nil {return err}
-		if c == 0 { return nil }
-		if int64(c) != ent.Size {return fmt.Errorf("size not match: %d != %d", c, ent.Size)}
-		s := h.Sum(nil)
-		if len(ent.Sha0) > 0 && !bytes.Equal(s, ent.Sha0[:32]) {panic(fmt.Errorf("sha0 not match: %s != %s %s %d", hex.EncodeToString(s), hex.EncodeToString(ent.Sha0), hex.EncodeToString(ent.Uuid), c))}
+		if h != nil {
+			if c == 0 { return nil }
+			if int64(c) != ent.Size {return fmt.Errorf("size not match: %d != %d", c, ent.Size)}
+			s := h.Sum(nil)
+			if len(ent.Sha0) > 0 && !bytes.Equal(s, ent.Sha0[:32]) {panic(fmt.Errorf("sha0 not match: %s != %s %s %d", hex.EncodeToString(s), hex.EncodeToString(ent.Sha0), hex.EncodeToString(ent.Uuid), c))}
+		}
 	}
 	if len(ent.Sha1) > 0 {
 		var c Counter
-		h := sha256.New()
-		w := io.MultiWriter(&c, h)
+		var h hash.Hash
+		var w io.Writer
+		if !e.Verify {w = &c} else {
+			h = sha256.New()
+			w = io.MultiWriter(&c, h)
+		}
 		if err := e.Get(ent.Uuid, 1, w); err != nil {return err}
-		if c == 0 {return nil}
-		s := h.Sum(nil)
-		if len(ent.Sha1) > 0 && !bytes.Equal(s, ent.Sha1[:32]) {panic(fmt.Errorf("sha1 not match: %s != %s %s %d", hex.EncodeToString(s), hex.EncodeToString(ent.Sha1), hex.EncodeToString(ent.Uuid), c))}
+		if h != nil {
+			if c == 0 {return nil}
+			s := h.Sum(nil)
+			if len(ent.Sha1) > 0 && !bytes.Equal(s, ent.Sha1[:32]) {panic(fmt.Errorf("sha1 not match: %s != %s %s %d", hex.EncodeToString(s), hex.EncodeToString(ent.Sha1), hex.EncodeToString(ent.Uuid), c))}
+		}
 	}
 	return nil
 }
