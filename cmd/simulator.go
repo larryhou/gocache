@@ -19,7 +19,7 @@ import (
 	"unsafe"
 )
 
-var environ struct{
+var environ struct {
 	secret  string
 	count   int
 	close   float64
@@ -33,10 +33,11 @@ var environ struct{
 	library []*client.Entity
 	cutouts int
 
-	idle chan *Context
+	idle   chan *Context
 	closed chan struct{}
 	entreq chan *Context
 	entity chan *client.Entity
+	rand   *rand.Rand
 }
 
 type Context struct {
@@ -78,6 +79,10 @@ func main() {
 	environ.entreq = make(chan *Context)
 	environ.entity = make(chan *client.Entity)
 
+	s := rand.NewSource(time.Now().UnixNano())
+	r := rand.New(s)
+	environ.rand = r
+
 	go func() {
 		for {
 			select {
@@ -85,8 +90,7 @@ func main() {
 				logger.Debug("ENTITY", zap.String("uuid", hex.EncodeToString(ent.Uuid)))
 				environ.library = append(environ.library, ent)
 			case ctx := <-environ.idle:
-				rand.Seed(time.Now().UnixNano())
-				num := rand.Int() + 1
+				num := r.Int() + 1
 				logger.Debug("IDLE", zap.Uintptr("ctx", ctx.Uintptr()), zap.Int("num", num))
 				if environ.cutouts > 0 {
 					logger.Debug("cut", zap.Uintptr("ctx", ctx.Uintptr()), zap.Int("num", num))
@@ -106,8 +110,7 @@ func main() {
 				logger.Debug("ENTREQ", zap.Uintptr("ctx", ctx.Uintptr()))
 				for {
 					if len(environ.library) > 0 {
-						rand.Seed(time.Now().UnixNano())
-						p := rand.Float64()
+						p := r.Float64()
 						span := len(environ.library)
 						if span > 200 { span = 200 }
 						n := math.Pow(p, 4) * float64(span)
@@ -199,7 +202,7 @@ func handle(c net.Conn) {
 
 func addClients(num int) {
 	for i := 0; i < num; i++ {
-		u := &client.Engine{Addr: environ.addr, Port: environ.port, Verify: environ.verify}
+		u := &client.Engine{Addr: environ.addr, Port: environ.port, Verify: environ.verify, Rand: environ.rand}
 		if err := u.Connect(); err != nil {
 			u.Close()
 			go func() {

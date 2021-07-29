@@ -12,13 +12,13 @@ import (
 	"io"
 	rand2 "math/rand"
 	"net"
-	"time"
 )
 
 type Engine struct {
 	Addr   string
 	Port   int
 	Verify bool
+	Rand   *rand2.Rand
 	c      *server.Stream
 	b      [32 << 10]byte
 }
@@ -118,7 +118,7 @@ func (e *Engine) Pump(size int64, w io.Writer) error {
 		num := int64(len(buf))
 		if size - sent < num { num = size - sent }
 		b := buf[:num]
-		rand.Read(b)
+		rand.Read(b[:64])
 		sent += num
 		for len(b) > 0 {
 			if n, err := w.Write(b); err != nil {return err} else {b = b[n:]}
@@ -139,8 +139,7 @@ func (e *Engine) Upload() (*Entity, error) {
 	ent.Uuid = make([]byte, 32)
 	rand.Read(ent.Uuid)
 
-	rand2.Seed(time.Now().UnixNano())
-	size := (16<<10) + int64(rand2.Intn(2<<20))
+	size := (16<<10) + int64(e.Rand.Intn(2<<20))
 	ent.Size = size
 	{
 		r, w := io.Pipe()
@@ -154,7 +153,7 @@ func (e *Engine) Upload() (*Entity, error) {
 
 		e.Put(ent.Uuid, 0, size, r)
 	}
-	if rand2.Int() % 3 > 0 {
+	if e.Rand.Int() % 3 > 0 {
 		r, w := io.Pipe()
 		size := size / 10
 		go func() {

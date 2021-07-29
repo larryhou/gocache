@@ -12,7 +12,7 @@ func main() {
     r := rand.New(s)
 
     down := 0.95
-    c := &client.Engine{}
+    c := &client.Engine{Rand: r}
     flag.BoolVar(&c.Verify, "verify", true, "verify sha256")
     flag.StringVar(&c.Addr, "addr", "127.0.0.1", "server address")
     flag.IntVar(&c.Port, "port", 9966, "server port")

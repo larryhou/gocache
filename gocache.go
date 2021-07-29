@@ -15,6 +15,7 @@ func main() {
     flag.IntVar(&s.CacheCap, "cache-cap", 0, "in-memory cache capacity")
     flag.StringVar(&s.Secret, "secret", "larryhou", "connect secret pass")
     flag.BoolVar(&s.UnsafeGet, "unsafe-get", true, "allow getting caches from server even when secret does not match")
+    flag.BoolVar(&s.DryRun, "dry-run", false, "dry run mode for profiling, don't use it in practise")
     flag.Parse()
 
     go http.ListenAndServe(":9999", nil)
