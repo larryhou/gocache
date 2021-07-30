@@ -42,7 +42,6 @@ func (f *File) Close() error {
     defer func() {
         if err := f.tryCache(); err == mcache.errors.cacherr {
             f.m.Reset()
-            mcache.pool.Put(f.m)
             logger.Debug("pool", zap.Uintptr("put", uintptr(unsafe.Pointer(f.m))))
             f.m = nil
         }
@@ -87,7 +86,6 @@ type memCache struct {
 
 func (m *memCache) remove(uuid string) {
     if entity, ok := m.lookups[uuid]; ok {
-        mcache.pool.Put(entity.data) /* recycle */
         delete(m.lookups, entity.uuid)
         m.size -= int64(entity.data.Cap())
         for i := 0; i < len(m.library); i++ {
@@ -114,7 +112,6 @@ func (m *memCache) put(uuid string, data *bytes.Buffer) {
         for i := 0; i < len(m.library); i++ {
             entity := m.library[i]
             if m.capacity < len(m.library) {
-                mcache.pool.Put(entity.data) /* recycle */
                 logger.Debug("mcache cls", zap.Int("cap", m.capacity), zap.Int("len", len(m.library)))
                 delete(m.lookups, entity.uuid)
                 m.library = append(m.library[:i], m.library[i+1:]...)
@@ -139,10 +136,7 @@ func (m *memCache) stat() {
             zap.Int64("size", size),
             zap.Int("get", mcache.core.g),
             zap.Float64("gpt", float64(mcache.core.g) / float64(mcache.core.n)),
-            zap.Int("put", mcache.core.p),
-            zap.Int("pget", mcache.pool.g),
-            zap.Int("pput", mcache.pool.p),
-            zap.Int("pnew", mcache.pool.n))
+            zap.Int("put", mcache.core.p))
         time.Sleep(5 * time.Second)
     }
 }
@@ -164,27 +158,8 @@ func (m *memCache) get(uuid string) (*bytes.Buffer, error) {
     return nil, mcache.errors.unavailable
 }
 
-type Pool struct {
-    *sync.Pool
-    p int
-    g int
-    n int
-}
-
-func (p *Pool) Put(v interface{}) {
-    p.p++
-    //todo: memory leeks
-    //p.Pool.Put(v)
-}
-
-func (p *Pool) Get() interface{} {
-    p.g++
-    return p.Pool.Get()
-}
-
 var mcache struct {
     core   memCache
-    pool   *Pool
     limit  int64
     errors struct {
         unavailable error
@@ -194,12 +169,6 @@ var mcache struct {
 
 func init() {
     mcache.limit = 2 << 20 // 2M
-    mcache.pool = &Pool{
-        Pool: &sync.Pool{New: func() interface {} {
-            mcache.pool.n++
-            return new(bytes.Buffer)
-        }},
-    }
     mcache.errors.unavailable = errors.New("not available for caching")
     mcache.errors.cacherr = errors.New("cache error")
     mcache.core.lookups = make(map[string]*memEntity)
@@ -217,7 +186,7 @@ func Open(name string, uuid string) (*File, error) {
     if s, err := file.Stat(); err == nil {
         f.size = s.Size()
         if mcache.core.capacity > 0 && s.Size() < mcache.limit {
-            f.m = mcache.pool.Get().(*bytes.Buffer)
+            f.m = bytes.NewBuffer(make([]byte, 0, s.Size()))
         }
     } else {
         file.Close()
@@ -231,7 +200,7 @@ func NewFile(name string, uuid string, size int64) (*File, error) {
     if err != nil {return nil, err}
     f := &File{f: file, name: name, uuid: uuid}
     if mcache.core.capacity > 0 && size < mcache.limit {
-        f.m = mcache.pool.Get().(*bytes.Buffer)
+        f.m = bytes.NewBuffer(make([]byte, 0, size))
     }
     return f, nil
 }
