@@ -52,11 +52,9 @@ func (f *File) Close() error {
 
 func (f *File) tryCache() error {
     if f.m != nil && f.f != nil {
-        if s, err := os.Stat(f.name); err == nil {
-            if s.Size() == int64(f.m.Len()) {
-                mcache.core.put(f.uuid, f.m)
-                return nil
-            }
+        if f.size == int64(f.m.Len()) {
+            mcache.core.put(f.uuid, f.m)
+            return nil
         }
         return mcache.errors.cacherr
     }
@@ -198,7 +196,7 @@ func Open(name string, uuid string) (*File, error) {
 func NewFile(name string, uuid string, size int64) (*File, error) {
     file, err := os.OpenFile(name, os.O_CREATE | os.O_WRONLY, 0700)
     if err != nil {return nil, err}
-    f := &File{f: file, name: name, uuid: uuid}
+    f := &File{f: file, name: name, uuid: uuid, size: size}
     if mcache.core.capacity > 0 && size < mcache.limit {
         f.m = bytes.NewBuffer(make([]byte, 0, size))
     }
