@@ -125,14 +125,14 @@ func (s *CacheServer) Listen() error {
 
 func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
     addr := c.RemoteAddr().String()
-    dsize := int64(0)
+    outgoing := int64(0)
     ts := time.Now()
     defer func() {
         c.Close()
-        if dsize > 0 {
+        if outgoing > 0 {
             elapse := time.Now().Sub(ts).Seconds()
-            speed := float64(dsize) / elapse
-            logger.Info("closed w", zap.String("addr", addr), zap.Int64("size", dsize), zap.Float64("speed", speed), zap.Float64("elapse", elapse))
+            speed := float64(outgoing) / elapse
+            logger.Info("closed w", zap.String("addr", addr), zap.Int64("size", outgoing), zap.Float64("speed", speed), zap.Float64("elapse", elapse))
         } else { logger.Info("closed w", zap.String("addr", addr)) }
     }()
     conn := &Stream{Rwp: c}
@@ -142,14 +142,18 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
         switch ctx.command {
         case 'g':
             t := strconv.Itoa(ctx.t)
-            size := int64(0)
+
             exists := true
+            var in *Stream
+            size := int64(0)
             filename := path.Join(s.Path, version, ctx.uuid[:2], ctx.uuid, t)
-            if s.DryRun { size = 2 << 20 } else {
-                logger.Debug("get +++", zap.String("uuid", ctx.uuid), zap.Int("type", ctx.t))
-                fi, err := os.Stat(filename)
-                exists = err == nil || os.IsExist(err)
-                if exists { size = fi.Size() }
+            if s.DryRun {
+                in = &Stream{Rwp: &Air{}}
+                size = 2<<20
+            } else {
+                file, err := Open(filename, ctx.uuid+t)
+                if err == nil { size = file.size } else { exists = false }
+                in = &Stream{Rwp: file}
             }
 
             p := 0
@@ -174,16 +178,19 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
             p += 8
 
             if err := conn.Write(buf, p); err != nil { logger.Error("send get + err", zap.Error(err));return }
-            dsize += int64(p)
+            outgoing += int64(p)
             if !exists {continue}
 
             logger.Debug("get >>>", zap.String("uuid", ctx.uuid), zap.Int("type", ctx.t), zap.Int64("size", size))
-
-            var in *Stream
-            if s.DryRun { in = &Stream{Rwp: Air{}} } else {
-                file, err := Open(filename, ctx.uuid+t)
-                if err != nil {logger.Error("get read cache err", zap.String("file", filename), zap.Error(err));return }
-                in = &Stream{Rwp: file}
+            if file, ok := in.Rwp.(*File); ok && file.c {
+                m := file.m
+                if err := conn.Write(m.Bytes(), m.Len()); err != nil {
+                    logger.Error("get sent cache err", zap.Int64("size", size), zap.Error(err))
+                    return
+                }
+                outgoing += int64(m.Len())
+                logger.Debug("get success", zap.String("type", t), zap.Int("sent", m.Len()), zap.String("file", filename), zap.Bool("cache", true))
+                continue
             }
 
             sent := int64(0)
@@ -204,8 +211,8 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
                 }
             }
             in.Close()
-            if sent == size { logger.Debug("get success", zap.Int64("sent", sent), zap.String("file", filename)) }
-            dsize += sent
+            logger.Debug("get success", zap.Int64("sent", sent), zap.String("file", filename))
+            outgoing += sent
         }
     }
 }
@@ -217,13 +224,13 @@ func (s *CacheServer) Handle(c net.Conn) {
     logger.Info("connected", zap.String("addr", addr))
     event := make(chan *Context)
     ts := time.Now()
-    usize := int64(0)
+    incoming := int64(0)
     defer func() {
         if ready {close(event)} else {c.Close()}
-        if usize > 0 {
+        if incoming > 0 {
             elapse := time.Now().Sub(ts).Seconds()
-            speed := float64(usize) / elapse
-            logger.Info("closed r", zap.String("addr", addr), zap.Int64("size", usize), zap.Float64("speed", speed), zap.Float64("elapse", elapse))
+            speed := float64(incoming) / elapse
+            logger.Info("closed r", zap.String("addr", addr), zap.Int64("size", incoming), zap.Float64("speed", speed), zap.Float64("elapse", elapse))
         } else { logger.Info("closed r", zap.String("addr", addr)) }
     }()
 
@@ -253,14 +260,14 @@ func (s *CacheServer) Handle(c net.Conn) {
             if err != io.EOF { logger.Error("read command err", zap.Error(err)) }
             return
         }
-        usize++
+        incoming++
         cmd := buf[0]
         if err := conn.Read(buf,32+4); err != nil { logger.Error("read get id err", zap.Error(err));return }
         id := buf[:32]
         uuid := hex.EncodeToString(id)
         t := int(binary.BigEndian.Uint32(buf[32:]))
         b := buf[36:]
-        usize += 36
+        incoming += 36
 
         switch cmd {
         case 'g':
@@ -274,58 +281,47 @@ func (s *CacheServer) Handle(c net.Conn) {
 
         case 'p':
             if err := conn.Read(b, 8); err != nil {logger.Error("put read id err", zap.Error(err));return}
-            usize += 8
+            incoming += 8
             size := int64(binary.BigEndian.Uint64(b))
             logger.Debug("put", zap.String("uuid", uuid), zap.Int("type", t), zap.Int64("size", size))
-            if !safe { /* read and discard in unsafe mode */
-                write := int64(0)
-                for write < size {
-                    num := int64(len(buf))
-                    if size - write < num { num = size - write }
-                    if err := conn.Read(buf, int(num)); err != nil {return} else {write += num}
-                }
-                usize += write
-                logger.Debug("put discard", zap.String("uuid", uuid), zap.Int("type", t), zap.Int64("size", write))
-                continue
-            }
 
             var out *Stream
             t := strconv.Itoa(t)
             dir := path.Join(s.Path, version, uuid[:2], uuid)
             filename := path.Join(dir, t)
-            if s.DryRun {out = &Stream{Rwp: Air{}}} else {
+            if s.DryRun || !safe {out = &Stream{Rwp: Air{}}} else {
                 if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) { os.MkdirAll(dir, 0700) }
                 name := buf[:32]
                 rand.Read(name)
                 if _, err := os.Stat(s.temp); err != nil && os.IsNotExist(err) { os.MkdirAll(s.temp, 0700) }
                 file, err := NewFile(path.Join(s.temp, hex.EncodeToString(name)), uuid+t, size)
-                if err != nil {logger.Error("put create file err", zap.String("file", filename), zap.Error(err));return}
+                if err != nil {logger.Error("put init err", zap.String("file", filename), zap.Error(err));return}
                 out = &Stream{Rwp: file}
             }
 
-            write := int64(0)
-            for write < size {
+            received := int64(0)
+            for received < size {
                 num := int64(len(buf))
-                if size - write < num { num = size - write }
+                if size - received < num { num = size - received }
                 if err := conn.Read(buf, int(num)); err != nil {out.Close();os.Remove(out.Name());return} else {
-                    write += num
+                    received += num
                     if err := out.Write(buf, int(num)); err != nil {
                         out.Close()
                         os.Remove(out.Name())
-                        logger.Error("put write cache err", zap.Int64("write", write), zap.Int64("size", size), zap.Error(err))
+                        logger.Error("put save err", zap.String("type", t), zap.Int64("received", received), zap.Int64("size", size), zap.Error(err))
                         return
                     }
                 }
             }
             out.Close()
-            if !s.DryRun {
+            if _, ok := out.Rwp.(*File); ok {
                 if err := os.Rename(out.Name(), filename); err != nil {
-                    logger.Error("put failure", zap.String("type", t), zap.Int64("write", write), zap.String("file", filename), zap.Error(err))
+                    logger.Error("put failure", zap.String("type", t), zap.Int64("received", received), zap.String("file", filename), zap.Error(err))
                     return
                 }
             }
-            logger.Debug("put success", zap.String("type", t), zap.Int64("write", write), zap.String("file", filename))
-            usize += write
+            logger.Debug("put success", zap.String("type", t), zap.Int64("received", received), zap.String("file", filename))
+            incoming += received
         default:
             logger.Error("unsupported command", zap.String("cmd", string(cmd)))
             return

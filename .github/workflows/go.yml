@@ -18,8 +18,17 @@ jobs:
       with:
         go-version: 1.16
 
-    - name: Build
-      run: go build -v ./...
+    - name: gocache
+      run: go build -v ./gocache.go
+
+    - name: client
+      run: go build -v -o client_ ./cmd/client.go
+
+    - name: simulator
+      run: go build -v ./cmd/simulator.go
+
+    - name: iperf
+      run: go build -v ./cmd/iperf.go
 
     - name: Test
-      run: go test -v ./...
+      run: go test -v .

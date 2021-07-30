@@ -3,6 +3,7 @@ package server
 import (
     "bytes"
     "errors"
+    "fmt"
     "go.uber.org/zap"
     "io"
     "os"
@@ -14,6 +15,7 @@ import (
 type File struct {
     uuid string
     name string
+    size int64
     m    *bytes.Buffer
     f    *os.File
     w    io.Writer
@@ -206,16 +208,20 @@ func init() {
 func Open(name string, uuid string) (*File, error) {
     if mcache.core.capacity > 0 {
         if data, err := mcache.core.get(uuid); err == nil {
-            return &File{m: data, uuid: uuid, c: true}, nil
+            return &File{m: data, uuid: uuid, size: int64(data.Len()), c: true}, nil
         }
     }
     file, err := os.Open(name)
     if err != nil {return nil, err}
     f := &File{f: file, name: name, uuid: uuid}
-    if mcache.core.capacity > 0 {
-        if s, err := file.Stat(); err == nil && s.Size() < mcache.limit {
+    if s, err := file.Stat(); err == nil {
+        f.size = s.Size()
+        if mcache.core.capacity > 0 && s.Size() < mcache.limit {
             f.m = mcache.pool.Get().(*bytes.Buffer)
         }
+    } else {
+        file.Close()
+        return nil, fmt.Errorf("stat err: %s", name)
     }
     return f, nil
 }
