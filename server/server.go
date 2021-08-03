@@ -386,23 +386,27 @@ func (s *CacheServer) Handle(c net.Conn) {
             case 'p':
                 logger.Debug("uput", zap.String("u", u))
                 if rsp, err := http.Get(u); err == nil {
-                    if rsp.ContentLength > 0 {
-                        if err := s.mktemp(); err == nil {
-                            rand.Read(buf[:32])
-                            if f, err := os.OpenFile(path.Join(s.temp, hex.EncodeToString(buf[:32])), os.O_CREATE | os.O_WRONLY, 0700); err == nil {
-                                success := false
-                                if n, err := io.Copy(f, rsp.Body); err != nil {
-                                    logger.Error("uput", zap.Int64("received", n), zap.Int64("expect", rsp.ContentLength), zap.String("url", u), zap.Error(err))
-                                } else { success = true }
-                                f.Close()
-                                if success && s.mkdir(dir) == nil {
-                                    os.Rename(f.Name(), filename)
-                                    logger.Debug("uput success", zap.Int64("size", rsp.ContentLength), zap.String("u", u))
+                    go func() {
+                        defer rsp.Body.Close()
+                        if rsp.ContentLength > 0 {
+                            if err := s.mktemp(); err == nil {
+                                name := make([]byte, 32)
+                                rand.Read(name)
+                                if f, err := os.OpenFile(path.Join(s.temp, hex.EncodeToString(name)), os.O_CREATE | os.O_WRONLY, 0700); err == nil {
+                                    if n, err := io.Copy(f, rsp.Body); err != nil {
+                                        logger.Error("uput", zap.Int64("received", n), zap.Int64("expect", rsp.ContentLength), zap.String("url", u), zap.Error(err))
+                                        f.Close()
+                                        return
+                                    }
+                                    if s.mkdir(dir) == nil {
+                                        f.Close()
+                                        os.Rename(f.Name(), filename)
+                                        logger.Debug("uput success", zap.Int64("size", rsp.ContentLength), zap.String("u", u))
+                                    }
                                 }
                             }
                         }
-                    }
-                    rsp.Body.Close()
+                    }()
                 } else { logger.Error("uput", zap.String("url", u), zap.Error(err)) }
             }
         default:
