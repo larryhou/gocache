@@ -10,6 +10,7 @@ import (
     "io"
     "math/rand"
     "net"
+    "net/http"
     "os"
     "path"
     "strconv"
@@ -27,6 +28,31 @@ type Entity struct {
 type Context struct {
     Entity
     command byte
+    file *WebFile
+}
+
+type WebFile struct {
+    body io.ReadCloser
+    size int64
+    file *os.File
+    name string
+}
+
+func (f *WebFile) Read(p []byte) (int, error) {
+    n, err := f.body.Read(p)
+    t := 0
+    for t < n { if i, err := f.file.Write(p[t:n]); err != nil {return n, err} else {t+=i} }
+    return n, err
+}
+
+func (f *WebFile) Write(p []byte) (int, error) {
+    return len(p), nil
+}
+
+func (f *WebFile) Close() error {
+    defer os.Rename(f.file.Name(), f.name)
+    defer f.file.Close()
+    return f.body.Close()
 }
 
 type Stream struct {
@@ -151,9 +177,14 @@ func (s *CacheServer) Send(c net.Conn, event chan *Context, version string) {
                 in = &Stream{Rwp: &Air{}}
                 size = 2<<20
             } else {
-                file, err := Open(filename, ctx.uuid+t)
-                if err == nil { size = file.size } else { exists = false }
-                in = &Stream{Rwp: file}
+                if ctx.file != nil {
+                    in = &Stream{Rwp: ctx.file}
+                    size = ctx.file.size
+                } else {
+                    file, err := Open(filename, ctx.uuid+t)
+                    if err == nil { size = file.size } else { exists = false }
+                    in = &Stream{Rwp: file}
+                }
             }
 
             p := 0
@@ -290,10 +321,10 @@ func (s *CacheServer) Handle(c net.Conn) {
             dir := path.Join(s.Path, version, uuid[:2], uuid)
             filename := path.Join(dir, t)
             if s.DryRun || !safe {out = &Stream{Rwp: Air{}}} else {
-                if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) { os.MkdirAll(dir, 0700) }
+                if err := s.mkdir(dir); err != nil {return}
                 name := buf[:32]
                 rand.Read(name)
-                if _, err := os.Stat(s.temp); err != nil && os.IsNotExist(err) { os.MkdirAll(s.temp, 0700) }
+                if err := s.mktemp(); err != nil {return}
                 file, err := NewFile(path.Join(s.temp, hex.EncodeToString(name)), uuid+t, size)
                 if err != nil {logger.Error("put init err", zap.String("file", filename), zap.Error(err));return}
                 out = &Stream{Rwp: file}
@@ -322,9 +353,71 @@ func (s *CacheServer) Handle(c net.Conn) {
             }
             logger.Debug("put success", zap.String("type", t), zap.Int64("received", received), zap.String("file", filename))
             incoming += received
+        case 'u':
+            if err := conn.Read(buf, 1); err != nil {return}
+            cmd := buf[0]
+
+            u := ""
+            if s, err := conn.ReadString(buf); err == nil {u=s} else {logger.Error("url", zap.Error(err));return}
+            dir := path.Join(s.Path, version, uuid[:2], uuid)
+            filename := path.Join(dir, uuid + strconv.Itoa(t))
+            switch cmd {
+            case 'g':
+                ctx := &Context{}
+                ctx.command = cmd
+                ctx.uuid = uuid
+                ctx.t = t
+                copy(ctx.id[:], id)
+                logger.Debug("uget", zap.String("u", u))
+                if _, err := os.Stat(filename); err != nil && os.IsNotExist(err) {
+                    if rsp, err := http.Get(u); err == nil {
+                        if rsp.ContentLength <= 0 {rsp.Body.Close()} else {
+                            if err := s.mktemp(); err == nil {
+                                rand.Read(buf[:32])
+                                if f, err := os.OpenFile(path.Join(s.temp, hex.EncodeToString(buf[:32])), os.O_CREATE | os.O_WRONLY, 0700); err == nil {
+                                    ctx.file = &WebFile{body: rsp.Body, size: rsp.ContentLength, name: filename, file: f}
+                                    logger.Debug("uget pipe", zap.Int64("size", rsp.ContentLength), zap.String("u", u))
+                                } else {rsp.Body.Close()}
+                            } else {rsp.Body.Close()}
+                        }
+                    }
+                }
+                event <- ctx
+            case 'p':
+                logger.Debug("uput", zap.String("u", u))
+                if rsp, err := http.Get(u); err == nil {
+                    if rsp.ContentLength > 0 {
+                        if err := s.mktemp(); err == nil {
+                            rand.Read(buf[:32])
+                            if f, err := os.OpenFile(path.Join(s.temp, hex.EncodeToString(buf[:32])), os.O_CREATE | os.O_WRONLY, 0700); err == nil {
+                                success := false
+                                if n, err := io.Copy(f, rsp.Body); err != nil {
+                                    logger.Error("uput", zap.Int64("received", n), zap.Int64("expect", rsp.ContentLength), zap.String("url", u), zap.Error(err))
+                                } else { success = true }
+                                f.Close()
+                                if success && s.mkdir(dir) == nil {
+                                    os.Rename(f.Name(), filename)
+                                    logger.Debug("uput success", zap.Int64("size", rsp.ContentLength), zap.String("u", u))
+                                }
+                            }
+                        }
+                    }
+                    rsp.Body.Close()
+                } else { logger.Error("uput", zap.String("url", u), zap.Error(err)) }
+            }
         default:
             logger.Error("unsupported command", zap.String("cmd", string(cmd)))
             return
         }
     }
+}
+
+func (s *CacheServer) mktemp() error {
+    if _, err := os.Stat(s.temp); err != nil && os.IsNotExist(err) { return os.MkdirAll(s.temp, 0700) }
+    return nil
+}
+
+func (s *CacheServer) mkdir(dir string) error {
+    if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) { return os.MkdirAll(dir, 0700) }
+    return nil
 }
