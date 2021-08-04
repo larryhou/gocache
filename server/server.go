@@ -5,6 +5,7 @@ import (
     "encoding/binary"
     "encoding/hex"
     "fmt"
+    "github.com/djherbis/times"
     "go.uber.org/zap"
     "go.uber.org/zap/zapcore"
     "io"
@@ -13,6 +14,7 @@ import (
     "net/http"
     "os"
     "path"
+    "path/filepath"
     "strconv"
     "time"
 )
@@ -52,6 +54,7 @@ func (f *WebFile) Write(p []byte) (int, error) {
 func (f *WebFile) Close() error {
     defer os.Rename(f.file.Name(), f.name)
     defer f.file.Close()
+    logger.Debug("close web file")
     return f.body.Close()
 }
 
@@ -99,7 +102,10 @@ func (s *Stream) WriteString(buf []byte, v string) error {
 
 func (s *Stream) Read(p []byte, n int) error {
     for t := 0; t < n; {
-        if i, err := s.Rwp.Read(p[t:n]); err != nil {return err} else {t+=i}
+        if i, err := s.Rwp.Read(p[t:n]); err == nil {t+=i} else {
+            if err == io.EOF && t + i == n {return nil}
+            return err
+        }
     }
     return nil
 }
@@ -129,6 +135,7 @@ type CacheServer struct {
     UnsafeGet bool
     DryRun    bool
     temp      string
+    cleants   time.Time
 }
 
 func (s *CacheServer) Listen() error {
@@ -293,6 +300,13 @@ func (s *CacheServer) Handle(c net.Conn) {
         }
         incoming++
         cmd := buf[0]
+        switch cmd {
+        case 'c':
+            if conn.Read(buf, 2) == nil { go s.clean(version, binary.BigEndian.Uint16(buf)) } else {return}
+            incoming += 2
+            continue
+        }
+
         if err := conn.Read(buf,32+4); err != nil { logger.Error("read get id err", zap.Error(err));return }
         id := buf[:32]
         uuid := hex.EncodeToString(id)
@@ -354,13 +368,13 @@ func (s *CacheServer) Handle(c net.Conn) {
             logger.Debug("put success", zap.String("type", t), zap.Int64("received", received), zap.String("file", filename))
             incoming += received
         case 'u':
-            if err := conn.Read(buf, 1); err != nil {return}
-            cmd := buf[0]
+            if err := conn.Read(b, 1); err != nil {return}
+            cmd := b[0]
 
             u := ""
-            if s, err := conn.ReadString(buf); err == nil {u=s} else {logger.Error("url", zap.Error(err));return}
+            if s, err := conn.ReadString(b); err == nil {u=s} else {logger.Error("url", zap.Error(err));return}
             dir := path.Join(s.Path, version, uuid[:2], uuid)
-            filename := path.Join(dir, uuid + strconv.Itoa(t))
+            filename := path.Join(dir, strconv.Itoa(t))
             switch cmd {
             case 'g':
                 ctx := &Context{}
@@ -368,23 +382,30 @@ func (s *CacheServer) Handle(c net.Conn) {
                 ctx.uuid = uuid
                 ctx.t = t
                 copy(ctx.id[:], id)
-                logger.Debug("uget", zap.String("u", u))
+                logger.Debug("uget", zap.String("url", u))
                 if _, err := os.Stat(filename); err != nil && os.IsNotExist(err) {
                     if rsp, err := http.Get(u); err == nil {
-                        if rsp.ContentLength <= 0 {rsp.Body.Close()} else {
+                        success := false
+                        if rsp.ContentLength > 0 {
                             if err := s.mktemp(); err == nil {
                                 rand.Read(buf[:32])
                                 if f, err := os.OpenFile(path.Join(s.temp, hex.EncodeToString(buf[:32])), os.O_CREATE | os.O_WRONLY, 0700); err == nil {
-                                    ctx.file = &WebFile{body: rsp.Body, size: rsp.ContentLength, name: filename, file: f}
-                                    logger.Debug("uget pipe", zap.Int64("size", rsp.ContentLength), zap.String("u", u))
-                                } else {rsp.Body.Close()}
-                            } else {rsp.Body.Close()}
+                                    if err := s.mkdir(dir); err == nil {
+                                        success = true
+                                        ctx.file = &WebFile{body: rsp.Body, size: rsp.ContentLength, name: filename, file: f}
+                                        logger.Debug("uget pipe", zap.Int64("size", rsp.ContentLength), zap.String("url", u))
+                                    } else {
+                                        logger.Error("uget pipe", zap.Int64("size", rsp.ContentLength), zap.String("url", u), zap.Error(err))
+                                    }
+                                }
+                            }
                         }
+                        if !success { rsp.Body.Close() }
                     }
                 }
                 event <- ctx
             case 'p':
-                logger.Debug("uput", zap.String("u", u))
+                logger.Debug("uput", zap.String("url", u))
                 if rsp, err := http.Get(u); err == nil {
                     go func() {
                         defer rsp.Body.Close()
@@ -400,8 +421,11 @@ func (s *CacheServer) Handle(c net.Conn) {
                                     }
                                     if s.mkdir(dir) == nil {
                                         f.Close()
-                                        os.Rename(f.Name(), filename)
-                                        logger.Debug("uput success", zap.Int64("size", rsp.ContentLength), zap.String("u", u))
+                                        if err := os.Rename(f.Name(), filename); err == nil {
+                                            logger.Debug("uput success", zap.Int64("size", rsp.ContentLength), zap.String("url", u), zap.String("name", filename))
+                                        } else {
+                                            logger.Error("uput failure", zap.Int64("size", rsp.ContentLength), zap.String("url", u), zap.Error(err))
+                                        }
                                     }
                                 }
                             }
@@ -424,4 +448,24 @@ func (s *CacheServer) mktemp() error {
 func (s *CacheServer) mkdir(dir string) error {
     if _, err := os.Stat(dir); err != nil && os.IsNotExist(err) { return os.MkdirAll(dir, 0700) }
     return nil
+}
+
+func (s *CacheServer) clean(version string, days uint16) {
+    ts := time.Now()
+    if ts.Sub(s.cleants) < time.Hour {return}
+    s.cleants = ts
+
+    dir := path.Join(s.Path, version)
+    logger.Debug("clean", zap.String("dir", dir), zap.Uint16("days", days))
+    filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+        if err != nil {return err}
+        if t := times.Get(info); !info.IsDir() {
+            if !t.AccessTime().IsZero() && ts.Sub(t.AccessTime()) > time.Duration(days) * 24 * time.Hour {
+                if err := os.Remove(path); err == nil {
+                    logger.Debug("clean", zap.String("name", path), zap.Int64("size", info.Size()))
+                }
+            }
+        }
+        return nil
+    })
 }
