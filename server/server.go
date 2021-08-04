@@ -456,13 +456,13 @@ func (s *CacheServer) clean(version string, days uint16) {
     s.cleants = ts
 
     dir := path.Join(s.Path, version)
-    logger.Debug("clean", zap.String("dir", dir), zap.Uint16("days", days))
+    logger.Info("clean", zap.String("dir", dir), zap.Uint16("days", days))
     filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
         if err != nil {return err}
         if t := times.Get(info); !info.IsDir() {
             if !t.AccessTime().IsZero() && ts.Sub(t.AccessTime()) > time.Duration(days) * 24 * time.Hour {
                 if err := os.Remove(path); err == nil {
-                    logger.Debug("clean", zap.String("name", path), zap.Int64("size", info.Size()))
+                    logger.Info("clean", zap.String("name", path), zap.Int64("size", info.Size()))
                 }
             }
         }
