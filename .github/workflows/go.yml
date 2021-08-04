@@ -33,7 +33,7 @@ jobs:
 
       - uses: actions/upload-artifact@v2
         with:
-          name: binaries-linux-arm64
+          name: binaries-linux-amd64
           path: build/linux/
 
       - uses: actions/upload-artifact@v2
