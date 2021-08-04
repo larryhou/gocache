@@ -19,9 +19,9 @@ jobs:
           go-version: 1.16
 
       - run: mkdir -p build/{linux,macos,windows}
-      - run: env GOOS=linux GOARCH=arm64 go build -v -o build/linux/gocache ./gocache.go
-      - run: env GOOS=linux GOARCH=arm64 go build -v -o build/linux/simulator ./cmd/simulator.go
-      - run: env GOOS=linux GOARCH=arm64 go build -v -o build/linux/client ./cmd/client.go
+      - run: env GOOS=linux GOARCH=amd64 go build -v -o build/linux/gocache ./gocache.go
+      - run: env GOOS=linux GOARCH=amd64 go build -v -o build/linux/simulator ./cmd/simulator.go
+      - run: env GOOS=linux GOARCH=amd64 go build -v -o build/linux/client ./cmd/client.go
 
       - run: env GOOS=darwin GOARCH=amd64 go build -v -o build/macos/gocache ./gocache.go
       - run: env GOOS=darwin GOARCH=amd64 go build -v -o build/macos/simulator ./cmd/simulator.go
