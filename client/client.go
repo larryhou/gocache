@@ -15,12 +15,13 @@ import (
 )
 
 type Engine struct {
-	Addr   string
-	Port   int
-	Verify bool
-	Rand   *rand2.Rand
-	c      *server.Stream
-	b      [32 << 10]byte
+	Addr    string
+	Port    int
+	Verify  bool
+	Rand    *rand2.Rand
+	Version string
+	c       *server.Stream
+	b       [32 << 10]byte
 }
 
 func (e *Engine) Close() error {
@@ -37,12 +38,48 @@ func (e *Engine) Connect() error {
 	buf := e.b[:]
 	secret := "larryhou"
 	if err := e.c.WriteString(buf, secret); err != nil {return err}
-	version := "simv2.0"
-	if err := e.c.WriteString(buf, version); err != nil {return err}
+	if err := e.c.WriteString(buf, e.Version); err != nil {return err}
 	if ver, err := e.c.ReadString(buf); err != nil {return err} else {
-		if ver != version {return fmt.Errorf("version not match: %s != %s", ver, version)}
+		if ver != e.Version {return fmt.Errorf("version not match: %s != %s", ver, e.Version)}
 	}
 	return nil
+}
+
+func (e *Engine) UGet(id []byte, t int, u string, w io.Writer) error {
+	p := 0
+	b := e.b[0:]
+	b[p] = 'u'
+	p++
+	copy(b[p:], id)
+	p += len(id)
+	binary.BigEndian.PutUint32(b[p:], uint32(t))
+	p += 4
+	b[p] = 'g'
+	p++
+	binary.BigEndian.PutUint16(b[p:], uint16(len(u)))
+	p += 2
+	copy(b[p:], u)
+	p += len(u)
+	if err := e.c.Write(b, p); err != nil {return err}
+	return e.get(id, t, w)
+}
+
+func (e *Engine) UPut(id []byte, t int, u string) error {
+	p := 0
+	b := e.b[0:]
+	b[p] = 'u'
+	p++
+	copy(b[p:], id)
+	p += len(id)
+	binary.BigEndian.PutUint32(b[p:], uint32(t))
+	p += 4
+	b[p] = 'p'
+	p++
+	binary.BigEndian.PutUint16(b[p:], uint16(len(u)))
+	p += 2
+	copy(b[p:], u)
+	p += len(u)
+	return e.c.Write(b, p)
 }
 
 func (e *Engine) Get(id []byte, t int, w io.Writer) error {
@@ -56,7 +93,11 @@ func (e *Engine) Get(id []byte, t int, w io.Writer) error {
 	p += 4
 
 	if err := e.c.Write(b, p); err != nil {return err}
+	return e.get(id, t, w)
+}
 
+func (e *Engine) get(id []byte, t int, w io.Writer) error {
+	b := e.b[:]
 	n := 1 + 32 + 4 + 8
 	if err := e.c.Read(b, n); err != nil {return err}
 	c := b[0]
@@ -109,6 +150,16 @@ func (e *Engine) Put(id []byte, t int, size int64, r io.Reader) error {
 		}
 	}
 	return nil
+}
+
+func (e *Engine) Clean(days uint16) error {
+	p := 0
+	b := e.b[:]
+	b[p] = 'c'
+	p++
+	binary.BigEndian.PutUint16(b[p:], days)
+	p += 2
+	return e.c.Write(b, p)
 }
 
 func (e *Engine) Pump(size int64, w io.Writer) error {

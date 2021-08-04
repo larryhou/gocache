@@ -28,6 +28,7 @@ var environ struct {
 	port    int
 	cmdPort int
 	verify  bool
+	version string
 
 	queue   []*Context
 	library []*client.Entity
@@ -70,6 +71,7 @@ func main() {
 	flag.IntVar(&environ.cmdPort, "cmd-port", 19966, "local command server port")
 	flag.IntVar(&level, "log-level", -1, "log level debug=-1 info=0 warn=1 error=2 dpanic=3 panic=4 fatal=5")
 	flag.BoolVar(&environ.verify, "verify", true, "verify sha256")
+	flag.StringVar(&environ.version, "version", "simv2.0", "cache version")
 	flag.Parse()
 
 	if v, err := zap.NewDevelopment(zap.IncreaseLevel(zapcore.Level(level))); err != nil {panic(err)} else {logger = v}
@@ -202,7 +204,7 @@ func handle(c net.Conn) {
 
 func addClients(num int) {
 	for i := 0; i < num; i++ {
-		u := &client.Engine{Addr: environ.addr, Port: environ.port, Verify: environ.verify, Rand: environ.rand}
+		u := &client.Engine{Addr: environ.addr, Port: environ.port, Verify: environ.verify, Rand: environ.rand, Version: environ.version}
 		if err := u.Connect(); err != nil {
 			u.Close()
 			go func() {
